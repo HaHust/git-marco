@@ -1,6 +1,7 @@
 package com.example.gitmacro.controller;
 
 
+import com.example.gitmacro.GitUtils;
 import com.example.gitmacro.model.GlobalData;
 import com.example.gitmacro.HelloApplication;
 import javafx.collections.FXCollections;
@@ -16,8 +17,7 @@ import javafx.scene.layout.VBox;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.PullCommand;
+import org.eclipse.jgit.api.*;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public class HomeController {
     @FXML
@@ -40,6 +39,8 @@ public class HomeController {
     private Button btnDes;
     @FXML
     private Button btnMerge;
+    @FXML
+    private Label labelMerge;
     @FXML
     private Accordion accordion;
 
@@ -55,11 +56,11 @@ public class HomeController {
         if (selectedDirectory != null) {
             if (isGitRepository(selectedDirectory)) {
                 System.out.println("Thư mục đã chọn là một kho lưu trữ Git.");
-
                 // Kiểm tra xem đường dẫn đã tồn tại trong Accordion chưa
                 if (!folderMap.containsKey(selectedDirectory.getAbsolutePath())) {
                     GlobalData.getInstance().setFile(selectedDirectory);
-                    List<Ref> branches = viewAllBranches(selectedDirectory);
+                    GlobalData.getInstance().getDataConfig().addRepo(selectedDirectory);
+                    List<Ref> branches = GitUtils.viewAllLocalBranches(selectedDirectory);
                     addFolderToAccordion(selectedDirectory.getName(), selectedDirectory.getPath(), branches);
                 } else {
                     System.out.println("Thư mục đã tồn tại trong Accordion.");
@@ -117,6 +118,13 @@ public class HomeController {
     @FXML
     protected void onBtnMerge(ActionEvent event) throws IOException, GitAPIException {
         Git git = Git.open(GlobalData.getInstance().getFile());
+
+        Repository repo = new FileRepositoryBuilder()
+                .setGitDir(GlobalData.getInstance().getFile())
+                .readEnvironment()
+                .findGitDir()
+                .build();
+
         String currentbranch = GlobalData.getInstance().getMergeModel().getCurrentbranch();
         String destinationBranch = GlobalData.getInstance().getMergeModel().getDestinationBranch();
         PullCommand source = git.pull().setRemote("origin").setRemoteBranchName(currentbranch);
@@ -126,10 +134,49 @@ public class HomeController {
             UsernamePasswordCredentialsProvider credentialsProvider = new UsernamePasswordCredentialsProvider("HaHust", "Haqh1234");
             source.setCredentialsProvider(credentialsProvider);
             des.setCredentialsProvider(credentialsProvider);
-            source.call();
-            des.call();
-        } catch (Exception e) {
+            // Stage all files
+            git.add().addFilepattern(".").call();
 
+            // Stash changes
+            git.stashCreate().call();
+            git.checkout().setName(currentbranch).call();
+
+            // Pull changes from branch 'a'
+            git.pull().setCredentialsProvider(new UsernamePasswordCredentialsProvider("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", "")).call();
+
+            // Switch to branch 'a'
+
+            // Unstash changes
+            git.stashApply().call();
+            git.commit()
+                    .setCommitter("HaHust", "vanha.hust@gmail.com")
+                    .setMessage("Your commit message")
+                    .call();
+            // Push changes to branch 'a'
+            git.push().setCredentialsProvider(new UsernamePasswordCredentialsProvider("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", "")).call();
+
+            // Switch to branch 'b'
+            git.checkout().setName(destinationBranch).call();
+            git.pull().setCredentialsProvider(new UsernamePasswordCredentialsProvider("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", "")).call();
+
+            // Merge changes from branch 'a' to branch 'b'
+            MergeResult o = git.merge().include(git.getRepository().resolve(currentbranch)).call();
+            if (o.getConflicts() != null && !o.getConflicts().isEmpty()) {
+                // Handle conflicts
+                labelMerge.setText("Conflicts occurred. Rolling back to the previous state.");
+
+                ProcessBuilder pb =  new ProcessBuilder("git", "merge", "--abort");
+                pb.directory(repo.getDirectory());
+                Process pr = pb.start();
+                pr.waitFor();
+
+            } else
+
+                labelMerge.setText("OKOKOK");
+                git.push().setCredentialsProvider(new UsernamePasswordCredentialsProvider("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", "")).call();
+
+        } catch (Exception e) {
+            e.printStackTrace();
         }
         System.out.println(GlobalData.getInstance().getMergeModel().toString());
     }
@@ -147,23 +194,6 @@ public class HomeController {
             e.printStackTrace();
             return false;
         }
-    }
-
-    private List<Ref> viewAllBranches(File gitDirectory) {
-        List<Ref> branches = null;
-        try {
-            Git git = Git.open(gitDirectory);
-            branches = git.branchList().call();
-
-            GlobalData.getInstance().setBranches(branches.parallelStream().map(Ref::getName).collect(Collectors.toList()));
-
-
-            git.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        return branches;
     }
 
     private void addFolderToAccordion(String folderName, String folderPath, List<Ref> branches) {
@@ -192,7 +222,7 @@ public class HomeController {
         // Sự kiện thay đổi chọn nhánh để bôi đậm
         branchListView.getSelectionModel().selectedItemProperty().addListener((obs, oldSelection, newSelection) -> {
             if (newSelection != null) {
-                branchListView.setCellFactory(cell -> new ListCell<String> () {
+                branchListView.setCellFactory(cell -> new ListCell<String>() {
                     @Override
                     protected void updateItem(String s, boolean b) {
                         super.updateItem(s, b);
